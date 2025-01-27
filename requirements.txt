@@ -9,4 +9,6 @@ PyPDF2
 sentence-transformers
 PyMuPDF
 pyttsx3
-speechrecognition
+SpeechRecognition
+python-dotenv
+PyAudio

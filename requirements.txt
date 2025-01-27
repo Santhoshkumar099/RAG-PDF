@@ -8,7 +8,5 @@ torch
 PyPDF2
 sentence-transformers
 PyMuPDF
-pyttsx3
-SpeechRecognition
 python-dotenv
-PyAudio
+

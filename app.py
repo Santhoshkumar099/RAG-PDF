@@ -11,13 +11,52 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains import create_retrieval_chain
 import time
-from threading import Thread
+from threading import Thread, Event
 
 from dotenv import load_dotenv
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# Custom CSS for styling
+class TTSEngine:
+    def __init__(self):
+        self._engine = None
+        self.is_speaking = False
+        self.stop_event = Event()
+        self.current_thread = None
+
+    def initialize_engine(self):
+        if not self._engine:
+            self._engine = pyttsx3.init()
+            self._engine.setProperty('rate', 150)
+            self._engine.setProperty('volume', 0.9)
+        return self._engine
+
+    def speak(self, text):
+        try:
+            self.stop_event.clear()
+            self.is_speaking = True
+            engine = self.initialize_engine()
+            engine.say(text)
+            engine.runAndWait()
+            if not self.stop_event.is_set():
+                self.is_speaking = False
+        except Exception as e:
+            print(f"Error in speak: {e}")
+            self.is_speaking = False
+        finally:
+            self.is_speaking = False
+
+    def stop(self):
+        if self.is_speaking:
+            self.stop_event.set()
+            if self._engine:
+                self._engine.stop()
+            self.is_speaking = False
+            if self.current_thread and self.current_thread.is_alive():
+                self.current_thread.join(timeout=1)
+            self._engine = None
+            self.current_thread = None
+
 def set_custom_style():
     st.markdown("""
         <style>
@@ -52,34 +91,6 @@ def set_custom_style():
         }
         </style>
     """, unsafe_allow_html=True)
-
-class TTSEngine:
-    def __init__(self):
-        self.engine = None
-        self.is_speaking = False
-        self.current_thread = None
-
-    def init_engine(self):
-        if not self.engine:
-            self.engine = pyttsx3.init()
-            self.engine.setProperty('rate', 150)
-            self.engine.setProperty('volume', 0.9)
-        return self.engine
-
-    def speak(self, text):
-        self.is_speaking = True
-        engine = self.init_engine()
-        engine.say(text)
-        engine.runAndWait()
-        self.is_speaking = False
-
-    def stop(self):
-        if self.engine and self.is_speaking:
-            self.engine.stop()
-            self.is_speaking = False
-            if self.current_thread and self.current_thread.is_alive():
-                self.current_thread = None
-            self.engine = None
 
 def get_pdf_processed(pdf_docs):
     text = ""
@@ -187,7 +198,10 @@ def user_input(prompt):
     
     with col2:
         if st.button("🔊", key="play_button", help="Play audio"):
-            st.session_state.tts_engine.stop()  # Stop any existing playback
+            # Stop any existing playback
+            st.session_state.tts_engine.stop()
+            
+            # Start new playback in a thread
             thread = Thread(target=st.session_state.tts_engine.speak, args=(answer,))
             st.session_state.tts_engine.current_thread = thread
             thread.start()
@@ -210,7 +224,7 @@ def user_input(prompt):
 def main():
     set_custom_style()
     
-    st.markdown('<h1 class="main-title">Smart 📑PDF Assistant</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-title">Smart PDF Assistant</h1>', unsafe_allow_html=True)
     
     # Initialize session states
     if 'speech_input' not in st.session_state:

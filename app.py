@@ -17,10 +17,47 @@ from dotenv import load_dotenv
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
+# Custom CSS for styling
+def set_custom_style():
+    st.markdown("""
+        <style>
+        .input-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .mic-button {
+            padding: 0 !important;
+            border-radius: 50% !important;
+            width: 40px !important;
+            height: 40px !important;
+            display: flex !important;
+            align-items: center;
+            justify-content: center;
+        }
+        .mic-icon {
+            font-size: 20px;
+            color: #FF4B4B;
+        }
+        .stTextInput > div > div > input {
+            padding-right: 40px;
+        }
+        .main-title {
+            color: #1E88E5;
+            text-align: center;
+            padding-bottom: 20px;
+        }
+        .stButton > button {
+            border-radius: 20px;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
 class TTSEngine:
     def __init__(self):
         self.engine = None
         self.is_speaking = False
+        self.current_thread = None
 
     def init_engine(self):
         if not self.engine:
@@ -40,6 +77,8 @@ class TTSEngine:
         if self.engine and self.is_speaking:
             self.engine.stop()
             self.is_speaking = False
+            if self.current_thread and self.current_thread.is_alive():
+                self.current_thread = None
             self.engine = None
 
 def get_pdf_processed(pdf_docs):
@@ -54,15 +93,15 @@ def get_pdf_processed(pdf_docs):
 def initialize_vector_store():
     pdf_files = st.file_uploader("Upload your PDF files", type=["pdf"], accept_multiple_files=True)
     
-    if st.button("Submit & Process"):
-        with st.spinner("Loading PDF..."):
+    if st.button("Process PDFs", key="process_button"):
+        with st.spinner("Processing PDF files..."):
             st.session_state.embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
             st.session_state.text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
             
             st.session_state.docs = get_pdf_processed(pdf_files)
             st.session_state.final_documents = st.session_state.text_splitter.split_text(st.session_state.docs)
             st.session_state.vector = FAISS.from_texts(st.session_state.final_documents, st.session_state.embeddings)
-            st.success("PDF content loaded successfully!")
+            st.success("PDFs processed successfully! You can now ask questions.")
 
 def get_conversational_chain():
     llm = ChatGroq(temperature=0, groq_api_key=GROQ_API_KEY, model_name="mixtral-8x7b-32768")
@@ -83,27 +122,38 @@ def speech_to_text():
     recognizer = sr.Recognizer()
     
     status_placeholder = st.empty()
-    status_placeholder.write("Listening... Speak your question")
+    status_placeholder.info("🎤 Listening... Speak your question")
     
     try:
         with sr.Microphone() as source:
             recognizer.adjust_for_ambient_noise(source, duration=1)
             audio = recognizer.listen(source, timeout=5)
             
-            status_placeholder.write("Processing speech...")
+            status_placeholder.info("🔄 Processing speech...")
             prompt = recognizer.recognize_google(audio)
             
-            status_placeholder.write(f"Recognized: {prompt}")
+            status_placeholder.success(f"✅ Recognized: {prompt}")
+            time.sleep(1)
+            status_placeholder.empty()
+            
+            # Automatically process the speech input
+            user_input(prompt)
             return prompt
             
     except sr.UnknownValueError:
-        status_placeholder.error("Sorry, could not understand audio")
+        status_placeholder.error("❌ Sorry, could not understand audio")
+        time.sleep(2)
+        status_placeholder.empty()
         return None
     except sr.RequestError as e:
-        status_placeholder.error(f"Could not request results; {e}")
+        status_placeholder.error(f"❌ Could not request results; {e}")
+        time.sleep(2)
+        status_placeholder.empty()
         return None
     except Exception as e:
-        status_placeholder.error(f"An error occurred: {e}")
+        status_placeholder.error(f"❌ An error occurred: {e}")
+        time.sleep(2)
+        status_placeholder.empty()
         return None
 
 def user_input(prompt):
@@ -111,71 +161,84 @@ def user_input(prompt):
         st.error("Please upload and process PDFs first!")
         return
     
-    # Initialize TTS engine in session state if not exists
     if 'tts_engine' not in st.session_state:
         st.session_state.tts_engine = TTSEngine()
     
     chain = get_conversational_chain()
-    start = time.process_time()
+    start = time.time()
     
     response = chain.invoke({"input": prompt})
     answer = response['answer']
     
-    # Store the answer in session state
     if 'current_answer' not in st.session_state:
         st.session_state.current_answer = None
     st.session_state.current_answer = answer
     
     # Create columns for the answer and buttons
+    st.markdown("### Answer:")
     col1, col2, col3 = st.columns([0.8, 0.1, 0.1])
     
     with col1:
-        st.write(answer)
+        st.markdown(f"""
+            <div style="background-color: #f8f9fa; padding: 20px; border-radius: 10px; border: 1px solid #e9ecef;">
+                {answer}
+            </div>
+        """, unsafe_allow_html=True)
     
     with col2:
-        if st.button("🔊 Play", key="play_button"):
-            # Stop any existing playback
-            st.session_state.tts_engine.stop()
-            # Start new playback in a thread
+        if st.button("🔊", key="play_button", help="Play audio"):
+            st.session_state.tts_engine.stop()  # Stop any existing playback
             thread = Thread(target=st.session_state.tts_engine.speak, args=(answer,))
+            st.session_state.tts_engine.current_thread = thread
             thread.start()
     
     with col3:
-        if st.button("⏹ Stop", key="stop_button"):
+        if st.button("⏹", key="stop_button", help="Stop audio"):
             st.session_state.tts_engine.stop()
     
-    st.write("Response time: ", time.process_time() - start)
+    end = time.time()
+    st.write(f"Response time: {(end - start):.2f} seconds")
     
-    with st.expander("Expand to view your question in PDF"):
+    with st.expander("View source in PDF"):
         for i, doc in enumerate(response['context']):
-            st.write(doc.page_content)
-            st.write("-----------------------------")
+            st.markdown(f"""
+                <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 10px 0;">
+                    {doc.page_content}
+                </div>
+            """, unsafe_allow_html=True)
 
 def main():
-    st.title("PDF Q&A with Voice Interaction")
+    set_custom_style()
     
-    # Initialize session state
+    st.markdown('<h1 class="main-title">Smart 📑PDF Assistant</h1>', unsafe_allow_html=True)
+    
+    # Initialize session states
     if 'speech_input' not in st.session_state:
         st.session_state.speech_input = None
+    if 'text_input' not in st.session_state:
+        st.session_state.text_input = ""
     
     initialize_vector_store()
     
-    input_method = st.radio("Choose input method:", 
-                           ["Text Input", "Speech Input"])
+    # Create input container with text input
+    st.markdown("### Ask a Question:")
+    prompt = st.text_input(
+        "",
+        value=st.session_state.text_input,
+        placeholder="Type your question here",
+        key="text_input_field"
+    )
     
-    if input_method == "Text Input":
-        prompt = st.text_input("Input your question here")
-        if prompt:
-            user_input(prompt)
-    else:
-        col1, col2 = st.columns([0.7, 0.3])
-        with col1:
-            if st.button("Start Listening", key="listen_button"):
-                st.session_state.speech_input = speech_to_text()
-        
-        if st.session_state.speech_input:
-            st.write("Processing question:", st.session_state.speech_input)
-            user_input(st.session_state.speech_input)
+    # Add microphone button below text input
+    if st.button("🎤 Click to Speak", key="mic_button", help="Click to speak"):
+        speech_result = speech_to_text()
+        if speech_result:
+            st.session_state.text_input = speech_result
+    
+    # Process text input if available
+    if prompt:
+        user_input(prompt)
+        st.session_state.text_input = ""  # Clear the input after processing
 
 if __name__ == "__main__":
     main()

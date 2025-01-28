@@ -1,7 +1,7 @@
-
 import os
 import streamlit as st
 import fitz
+import pyttsx3
 from langchain_community.vectorstores.faiss import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -10,10 +10,51 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains import create_retrieval_chain
 import time
+from threading import Thread, Event
 
 from dotenv import load_dotenv
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+class TTSEngine:
+    def __init__(self):
+        self._engine = None
+        self.is_speaking = False
+        self.stop_event = Event()
+        self.current_thread = None
+
+    def initialize_engine(self):
+        if not self._engine:
+            self._engine = pyttsx3.init()
+            self._engine.setProperty('rate', 150)
+            self._engine.setProperty('volume', 0.9)
+        return self._engine
+
+    def speak(self, text):
+        try:
+            self.stop_event.clear()
+            self.is_speaking = True
+            engine = self.initialize_engine()
+            engine.say(text)
+            engine.runAndWait()
+            if not self.stop_event.is_set():
+                self.is_speaking = False
+        except Exception as e:
+            print(f"Error in speak: {e}")
+            self.is_speaking = False
+        finally:
+            self.is_speaking = False
+
+    def stop(self):
+        if self.is_speaking:
+            self.stop_event.set()
+            if self._engine:
+                self._engine.stop()
+            self.is_speaking = False
+            if self.current_thread and self.current_thread.is_alive():
+                self.current_thread.join(timeout=1)
+            self._engine = None
+            self.current_thread = None
 
 def set_custom_style():
     st.markdown("""
@@ -30,9 +71,20 @@ def set_custom_style():
             color: #1E88E5;
             text-align: center;
             padding-bottom: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
         }
         .stButton > button {
             border-radius: 20px;
+        }
+        .answer-container {
+            background-color: #f8f9fa;
+            padding: 20px;
+            border-radius: 10px;
+            border: 1px solid #e9ecef;
+            margin-bottom: 10px;
         }
         </style>
     """, unsafe_allow_html=True)
@@ -78,6 +130,9 @@ def user_input(prompt):
         st.error("Please upload and process PDFs first!")
         return
     
+    if 'tts_engine' not in st.session_state:
+        st.session_state.tts_engine = TTSEngine()
+    
     chain = get_conversational_chain()
     start = time.time()
     
@@ -88,16 +143,31 @@ def user_input(prompt):
         st.session_state.current_answer = None
     st.session_state.current_answer = answer
     
-    # Create columns for the answer
-    st.markdown("### Answer:")
-    col1 = st.columns(1)[0]
+    # Display answer with audio controls
+    st.markdown("### Answer")
     
-    with col1:
-        st.markdown(f"""
-            <div style="background-color: #f8f9fa; padding: 20px; border-radius: 10px; border: 1px solid #e9ecef;">
-                {answer}
-            </div>
-        """, unsafe_allow_html=True)
+    # Create a container for the answer and buttons
+    container = st.container()
+    with container:
+        col1, col2, col3 = st.columns([0.8, 0.1, 0.1])
+        
+        with col1:
+            st.markdown(f"""
+                <div class="answer-container">
+                    {answer}
+                </div>
+            """, unsafe_allow_html=True)
+        
+        with col2:
+            if st.button("🔊", key="play_button", help="Play audio"):
+                st.session_state.tts_engine.stop()
+                thread = Thread(target=st.session_state.tts_engine.speak, args=(answer,))
+                st.session_state.tts_engine.current_thread = thread
+                thread.start()
+        
+        with col3:
+            if st.button("⏹", key="stop_button", help="Stop audio"):
+                st.session_state.tts_engine.stop()
     
     end = time.time()
     st.write(f"Response time: {(end - start):.2f} seconds")
@@ -113,13 +183,12 @@ def user_input(prompt):
 def main():
     set_custom_style()
     
-    st.markdown('<h1 class="main-title">Smart PDF Assistant</h1>', unsafe_allow_html=True)
-    
-    # Initialize session states
-    if 'speech_input' not in st.session_state:
-        st.session_state.speech_input = None
-    if 'text_input' not in st.session_state:
-        st.session_state.text_input = ""
+    # Add PDF icon to the title
+    st.markdown("""
+        <h1 class="main-title">
+            📄 Smart PDF Assistant
+        </h1>
+    """, unsafe_allow_html=True)
     
     initialize_vector_store()
     
@@ -127,15 +196,13 @@ def main():
     st.markdown("### Ask a Question:")
     prompt = st.text_input(
         "",
-        value=st.session_state.text_input,
         placeholder="Type your question here",
         key="text_input_field"
     )
     
-    
+    # Process text input if available
     if prompt:
         user_input(prompt)
-        st.session_state.text_input = ""  
 
 if __name__ == "__main__":
     main()

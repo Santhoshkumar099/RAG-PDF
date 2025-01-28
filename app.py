@@ -1,7 +1,9 @@
 import os
 import streamlit as st
 import fitz
-import pyttsx3
+from gtts import gTTS
+import base64
+import io
 from langchain_community.vectorstores.faiss import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -10,51 +12,34 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains import create_retrieval_chain
 import time
-from threading import Thread, Event
 
 from dotenv import load_dotenv
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-class TTSEngine:
-    def __init__(self):
-        self._engine = None
-        self.is_speaking = False
-        self.stop_event = Event()
-        self.current_thread = None
+def text_to_speech(text):
+    """Convert text to speech using gTTS and return the audio bytes"""
+    try:
+        audio_buffer = io.BytesIO()
+        tts = gTTS(text=text, lang='en')
+        tts.write_to_fp(audio_buffer)
+        audio_buffer.seek(0)
+        audio_bytes = audio_buffer.read()
+        return audio_bytes
+    except Exception as e:
+        st.error(f"Error generating audio: {str(e)}")
+        return None
 
-    def initialize_engine(self):
-        if not self._engine:
-            self._engine = pyttsx3.init()
-            self._engine.setProperty('rate', 150)
-            self._engine.setProperty('volume', 0.9)
-        return self._engine
-
-    def speak(self, text):
-        try:
-            self.stop_event.clear()
-            self.is_speaking = True
-            engine = self.initialize_engine()
-            engine.say(text)
-            engine.runAndWait()
-            if not self.stop_event.is_set():
-                self.is_speaking = False
-        except Exception as e:
-            print(f"Error in speak: {e}")
-            self.is_speaking = False
-        finally:
-            self.is_speaking = False
-
-    def stop(self):
-        if self.is_speaking:
-            self.stop_event.set()
-            if self._engine:
-                self._engine.stop()
-            self.is_speaking = False
-            if self.current_thread and self.current_thread.is_alive():
-                self.current_thread.join(timeout=1)
-            self._engine = None
-            self.current_thread = None
+def get_audio_html(audio_bytes):
+    """Generate HTML for audio player"""
+    b64 = base64.b64encode(audio_bytes).decode()
+    audio_html = f"""
+        <audio controls>
+            <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
+            Your browser does not support the audio element.
+        </audio>
+        """
+    return audio_html
 
 def set_custom_style():
     st.markdown("""
@@ -85,6 +70,21 @@ def set_custom_style():
             border-radius: 10px;
             border: 1px solid #e9ecef;
             margin-bottom: 10px;
+        }
+        .audio-section {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 10px;
+            justify-content: center;
+        }
+        .audio-container {
+            display: inline-block;
+            margin-left: 10px;
+        }
+        div.row-widget.stButton {
+            width: auto;
+            min-width: 100px;
         }
         </style>
     """, unsafe_allow_html=True)
@@ -130,9 +130,6 @@ def user_input(prompt):
         st.error("Please upload and process PDFs first!")
         return
     
-    if 'tts_engine' not in st.session_state:
-        st.session_state.tts_engine = TTSEngine()
-    
     chain = get_conversational_chain()
     start = time.time()
     
@@ -146,28 +143,32 @@ def user_input(prompt):
     # Display answer with audio controls
     st.markdown("### Answer")
     
-    # Create a container for the answer and buttons
+    # Create a container for the answer
     container = st.container()
     with container:
-        col1, col2, col3 = st.columns([0.8, 0.1, 0.1])
+        # Display the answer
+        st.markdown(f"""
+            <div class="answer-container">
+                {answer}
+            </div>
+        """, unsafe_allow_html=True)
         
-        with col1:
-            st.markdown(f"""
-                <div class="answer-container">
-                    {answer}
-                </div>
-            """, unsafe_allow_html=True)
+        # Create columns for the audio section
+        audio_cols = st.columns([0.3, 0.4, 0.3])
         
-        with col2:
-            if st.button("🔊", key="play_button", help="Play audio"):
-                st.session_state.tts_engine.stop()
-                thread = Thread(target=st.session_state.tts_engine.speak, args=(answer,))
-                st.session_state.tts_engine.current_thread = thread
-                thread.start()
-        
-        with col3:
-            if st.button("⏹", key="stop_button", help="Stop audio"):
-                st.session_state.tts_engine.stop()
+        # Use the middle column for audio controls
+        with audio_cols[1]:
+            # Create a container for horizontal layout
+            st.markdown('<div class="audio-section">', unsafe_allow_html=True)
+            
+            # Add the Listen button
+            if st.button("🔊 Listen", key="play_button"):
+                audio_bytes = text_to_speech(answer)
+                if audio_bytes:
+                    # Display audio player inline
+                    st.markdown(get_audio_html(audio_bytes), unsafe_allow_html=True)
+            
+            st.markdown('</div>', unsafe_allow_html=True)
     
     end = time.time()
     st.write(f"Response time: {(end - start):.2f} seconds")

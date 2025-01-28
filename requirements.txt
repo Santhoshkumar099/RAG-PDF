@@ -1,14 +1,10 @@
 streamlit
-langchain
+PyMuPDF
+gTTS
 langchain-community
 langchain-groq
-pyttsx3
 faiss-cpu
-huggingface-hub
-torch
-PyPDF2
 sentence-transformers
-PyMuPDF
 python-dotenv
 
 

@@ -44,7 +44,7 @@ def initialize_vector_store():
 def query_domo_api(prompt):
     payload = {
         "input": prompt,  
-        "model": "domo.domo_ai.domogpt-chat-small-v1:anthropic",
+        "model": "domo.domo_ai.domogpt-chat-medium-v1.1:anthropic",
         "system": """You are a chatbot that answers questions based on the given PDF text. Provide concise answers, limited to 2 lines, ensuring clarity and relevance."""
     }
 

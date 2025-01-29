@@ -1,9 +1,10 @@
 streamlit
 PyMuPDF
+langchain
 langchain-community
 faiss-cpu
 sentence-transformers
 python-dotenv
-request
+requests
 
 
